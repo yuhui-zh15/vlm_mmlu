@@ -4,7 +4,12 @@ import torch
 import numpy as np
 import pandas as pd
 from categories import subcategories, categories
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    LlavaForConditionalGeneration,
+    LlavaProcessor,
+)
 import time
 
 choices = ["A", "B", "C", "D"]
@@ -63,20 +68,16 @@ def eval(args, subject, model, tokenizer, dev_df, test_df):
 
         label = test_df.iloc[i, test_df.shape[1] - 1]
 
-        decoder_input_ids = tokenizer("", return_tensors="pt").input_ids.cuda()
-        decoder_input_ids = model._shift_right(decoder_input_ids)
-        logits = model(
-            input_ids=input_ids, decoder_input_ids=decoder_input_ids
-        ).logits.flatten()
+        logits = model(input_ids=input_ids).logits[0, -1]
 
         probs = (
             torch.nn.functional.softmax(
                 torch.tensor(
                     [
-                        logits[tokenizer("A").input_ids[0]],
-                        logits[tokenizer("B").input_ids[0]],
-                        logits[tokenizer("C").input_ids[0]],
-                        logits[tokenizer("D").input_ids[0]],
+                        logits[tokenizer("A").input_ids[1]],
+                        logits[tokenizer("B").input_ids[1]],
+                        logits[tokenizer("C").input_ids[1]],
+                        logits[tokenizer("D").input_ids[1]],
                     ]
                 ),
                 dim=0,
@@ -102,19 +103,26 @@ def eval(args, subject, model, tokenizer, dev_df, test_df):
 
 def main(args):
 
-    model = AutoModelForSeq2SeqLM.from_pretrained(args.model)
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    heads_per_gpu = len(model.encoder.block) // args.ngpu
-    device_map = {
-        gpu: list(
-            range(
-                0 + (gpu * heads_per_gpu),
-                (0 + (gpu * heads_per_gpu)) + heads_per_gpu,
-            )
-        )
-        for gpu in range(args.ngpu)
-    }
-    model.parallelize(device_map)
+    if args.model == "lmsys/vicuna-7b-v1.5":
+        print("Loading Vicuna model")
+        model = AutoModelForCausalLM.from_pretrained(args.model)
+        tokenizer = AutoTokenizer.from_pretrained(args.model)
+    else:
+        print("Loading Llava model")
+        model = LlavaForConditionalGeneration.from_pretrained(args.model).language_model
+        tokenizer = LlavaProcessor.from_pretrained(args.model)
+    # heads_per_gpu = len(model.encoder.block) // args.ngpu
+    # device_map = {
+    #     gpu: list(
+    #         range(
+    #             0 + (gpu * heads_per_gpu),
+    #             (0 + (gpu * heads_per_gpu)) + heads_per_gpu,
+    #         )
+    #     )
+    #     for gpu in range(args.ngpu)
+    # }
+    # model.parallelize(device_map)
+    model.cuda()
     model.eval()
     subjects = sorted(
         [
@@ -184,7 +192,7 @@ if __name__ == "__main__":
         "--model",
         "-m",
         type=str,
-        default="google/flan-t5-small",
+        default="lmsys/vicuna-7b-v1.5",
     )
     args = parser.parse_args()
     main(args)
